@@ -1,0 +1,64 @@
+From sender@example.com Sat Mar 29 10:00:00 2025
+From: Alice <alice@example.com>
+To: Bob <bob@example.com>
+Subject: Hello from umbox!
+Date: Sat, 29 Mar 2025 10:00:00 +0000
+Message-ID: <msg001@example.com>
+Content-Type: text/plain; charset="utf-8"
+
+Hey Bob,
+
+This is a test email to verify that umbox works correctly.
+Pretty cool, right?
+
+Best,
+Alice
+
+From sender2@example.com Sat Mar 29 11:00:00 2025
+From: Charlie <charlie@example.com>
+To: Alice <alice@example.com>, Bob <bob@example.com>
+Subject: Re: Meeting notes
+Date: Sat, 29 Mar 2025 11:00:00 +0000
+Message-ID: <msg002@example.com>
+Content-Type: text/plain; charset="utf-8"
+
+Hi everyone,
+
+Here are the meeting notes from today:
+
+1. We discussed the new feature roadmap
+2. Decided to prioritize the TUI viewer
+3. Next meeting is on Monday
+
+Thanks,
+Charlie
+
+From sender3@example.com Sat Mar 29 12:00:00 2025
+From: Dave <dave@example.com>
+To: team@example.com
+Subject: Quarterly Report
+Date: Sat, 29 Mar 2025 12:00:00 +0000
+Message-ID: <msg003@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="----=_Part_123"
+
+------=_Part_123
+Content-Type: text/plain; charset="utf-8"
+
+Hi team,
+
+Please find the quarterly report attached.
+
+Regards,
+Dave
+
+------=_Part_123
+Content-Type: application/pdf; name="report.pdf"
+Content-Disposition: attachment; filename="report.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5k
+b2JqCg==
+
+------=_Part_123--
+
