@@ -62,3 +62,56 @@ b2JqCg==
 
 ------=_Part_123--
 
+From sender4@example.com Sat Mar 29 13:00:00 2025
+From: =?iso-8859-1?B?QWx1bW5pIEL8cm8gZGVyIEZyZWllbiBVbml2ZXJzaXTkdCBC?=
+ =?iso-8859-1?B?ZXJsaW4=?= <alumni@fu-berlin.de>
+To: student@example.com
+Subject: =?iso-8859-1?B?RWlubGFkdW5nIGluIGRhcyBBbHVtbmktTmV0endlcmsg?=
+ =?iso-8859-1?B?ZGVyIEZyZWllbiBVbml2ZXJzaXTkdCBCZXJsaW4=?=
+Date: Sat, 29 Mar 2025 13:00:00 +0000
+Message-ID: <msg004@example.com>
+Content-Type: text/plain; charset="utf-8"
+
+Sehr geehrte Damen und Herren,
+
+wir laden Sie herzlich ein, dem Alumni-Netzwerk der Freien
+Universitaet Berlin beizutreten.
+
+Mit freundlichen Gruessen,
+Das Alumni Buero
+
+From sender5@example.com Sat Mar 29 14:00:00 2025
+From: =?utf-8?Q?Fran=C3=A7ois_M=C3=BCller?= <francois@example.ch>
+To: =?utf-8?Q?b=C3=BCro?=@example.ch
+Subject: =?utf-8?Q?R=C3=A9servation_confirm=C3=A9e_=E2=80=94_Z=C3=BCrich_?=
+ =?utf-8?Q?=E2=86=92_Gen=C3=A8ve?=
+Date: Sat, 29 Mar 2025 14:00:00 +0000
+Message-ID: <msg005@example.com>
+Content-Type: text/plain; charset="utf-8"
+
+Bonjour,
+
+Votre reservation Zurich-Geneve est confirmee.
+
+Cordialement,
+Francois Mueller
+
+From sender6@example.com Sat Mar 29 15:00:00 2025
+From: newsletter@example.com
+To: subscriber@example.com
+Subject: Weekly Newsletter
+Date: Sat, 29 Mar 2025 15:00:00 +0000
+Message-ID: <msg006@example.com>
+Content-Type: text/html; charset="utf-8"
+
+<html>
+<body>
+<h1>Weekly Newsletter</h1>
+<p>Hello subscriber! Here are this week's highlights.</p>
+<ul>
+<li>Feature update: new TUI viewer</li>
+<li>Bug fix: MIME header decoding</li>
+</ul>
+</body>
+</html>
+
