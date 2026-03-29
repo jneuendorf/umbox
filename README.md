@@ -210,8 +210,11 @@ go run . extract inbox.mbox -o ./test-output
 # Build
 go build -o umbox .
 
-# Run tests (when added)
+# Run tests
 go test ./...
+
+# Run tests with verbose output
+go test ./... -v
 
 # Format code (Go has an official formatter — always use it)
 go fmt ./...

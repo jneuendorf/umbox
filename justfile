@@ -14,9 +14,13 @@ tidy:
 fmt:
     go fmt ./...
 
-# Run tests (when added)
+# Run all tests (mbox parser + formatter)
 test:
     go test ./...
+
+# Run tests with verbose output (shows each test name)
+test-v:
+    go test ./... -v
 
 # Build and extract sample emails as .eml files
 sample-extract: build
