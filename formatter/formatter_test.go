@@ -54,8 +54,8 @@ func newTestMessageWithAttachment() *mbox.Message {
 func TestRegistryList(t *testing.T) {
 	names := List()
 
-	// We expect at least "markdown" and "plaintext" (registered via init()).
-	expected := map[string]bool{"markdown": false, "plaintext": false}
+	// We expect "markdown", "plaintext", and "raw" (registered via init()).
+	expected := map[string]bool{"markdown": false, "plaintext": false, "raw": false}
 	for _, name := range names {
 		if _, ok := expected[name]; ok {
 			expected[name] = true
@@ -71,7 +71,7 @@ func TestRegistryList(t *testing.T) {
 // TestRegistryGet checks that Get returns the correct formatter and errors.
 func TestRegistryGet(t *testing.T) {
 	// Valid names should return a formatter.
-	for _, name := range []string{"plaintext", "markdown"} {
+	for _, name := range []string{"plaintext", "markdown", "raw"} {
 		f, err := Get(name)
 		if err != nil {
 			t.Errorf("Get(%q) returned error: %v", name, err)
@@ -268,5 +268,44 @@ func TestMarkdownMultipleRecipients(t *testing.T) {
 
 	if !strings.Contains(output, "alice@example.com, bob@example.com") {
 		t.Errorf("expected comma-separated recipients, got:\n%s", output)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Raw formatter tests
+// ---------------------------------------------------------------------------
+
+// TestRawOutputMatchesRawBytes checks that the raw formatter writes the exact
+// RawBytes content without any transformation.
+func TestRawOutputMatchesRawBytes(t *testing.T) {
+	rawContent := []byte("From: test@example.com\nSubject: Test\n\nHello world\n")
+	msg := &mbox.Message{
+		RawBytes: rawContent,
+	}
+
+	f, _ := Get("raw")
+	var buf bytes.Buffer
+	if err := f.Format(msg, &buf); err != nil {
+		t.Fatalf("Format failed: %v", err)
+	}
+
+	if !bytes.Equal(buf.Bytes(), rawContent) {
+		t.Errorf("raw output differs from RawBytes:\n  got  = %q\n  want = %q", buf.Bytes(), rawContent)
+	}
+}
+
+// TestRawExtension verifies the file extension.
+func TestRawExtension(t *testing.T) {
+	f, _ := Get("raw")
+	if ext := f.Extension(); ext != ".eml" {
+		t.Errorf("raw Extension() = %q, want %q", ext, ".eml")
+	}
+}
+
+// TestRawName verifies the formatter name.
+func TestRawName(t *testing.T) {
+	f, _ := Get("raw")
+	if name := f.Name(); name != "raw" {
+		t.Errorf("raw Name() = %q, want %q", name, "raw")
 	}
 }

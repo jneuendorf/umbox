@@ -22,21 +22,21 @@ test:
 test-v:
     go test ./... -v
 
-# Build and extract sample emails as .eml files
+# Build and extract sample emails as raw .eml files
 sample-extract: build
     ./umbox extract testdata/test.mbox -o /tmp/umbox-sample-eml
     @echo "\nOutput:"
     @ls -l /tmp/umbox-sample-eml
 
-# Build and convert sample emails to markdown
+# Build and extract sample emails as markdown
 sample-markdown: build
-    ./umbox convert testdata/test.mbox -f markdown -o /tmp/umbox-sample-md
+    ./umbox extract testdata/test.mbox -f markdown -o /tmp/umbox-sample-md
     @echo "\nOutput:"
     @ls -l /tmp/umbox-sample-md
 
-# Build and convert sample emails to plain text
+# Build and extract sample emails as plain text
 sample-plaintext: build
-    ./umbox convert testdata/test.mbox -f plaintext -o /tmp/umbox-sample-txt
+    ./umbox extract testdata/test.mbox -f plaintext -o /tmp/umbox-sample-txt
     @echo "\nOutput:"
     @ls -l /tmp/umbox-sample-txt
 

@@ -21,9 +21,6 @@ import (
 	// Our own packages — the TUI is just a frontend over these.
 	"github.com/jneuendorf/umbox/formatter"
 	"github.com/jneuendorf/umbox/mbox"
-
-	// Blank import to trigger formatter registration via init() functions.
-	_ "github.com/jneuendorf/umbox/formatter"
 )
 
 // --------------------------------------------------------------------------
@@ -72,10 +69,11 @@ type Model struct {
 	statusMsg    string          // success/error message after export
 
 	// --- Layout ---
-	focusedPane int  // which pane has focus (paneList or panePreview)
-	width       int  // terminal width in columns
-	height      int  // terminal height in rows
-	ready       bool // true after we've received the first WindowSizeMsg
+	focusedPane  int  // which pane has focus (paneList or panePreview)
+	width        int  // terminal width in columns
+	height       int  // terminal height in rows
+	chromeHeight int  // measured height of title + search + help bars (may be >3 if text wraps)
+	ready        bool // true after we've received the first WindowSizeMsg
 }
 
 // --------------------------------------------------------------------------
@@ -221,13 +219,17 @@ func (m Model) View() string {
 
 	mainContent := m.viewMainContent()
 
-	// Status message or help bar at the bottom.
+	// Build the help/status bar.
 	var bottomBar string
 	if m.statusMsg != "" {
 		bottomBar = statusBarStyle.Width(m.width).Render(m.statusMsg)
 	} else {
 		bottomBar = helpBarStyle.Width(m.width).Render(helpText())
 	}
+
+	// Measure chrome height for next frame's layout calculations.
+	chromeHeight := lipgloss.Height(titleBar) + lipgloss.Height(searchBar) + lipgloss.Height(bottomBar)
+	m.chromeHeight = chromeHeight
 
 	// Stack everything vertically.
 	return lipgloss.JoinVertical(lipgloss.Left,
@@ -537,7 +539,7 @@ func (m Model) updatePreview() Model {
 // --------------------------------------------------------------------------
 
 // doExport writes the selected emails using the chosen formatter.
-// This reuses the same formatter package that the CLI "convert" command uses.
+// This reuses the same formatter package that the CLI extract command uses.
 func (m Model) doExport() Model {
 	formats := formatter.List()
 	if m.exportFormat >= len(formats) {
@@ -581,8 +583,9 @@ func (m Model) doExport() Model {
 			return m
 		}
 
-		// Save attachments if present.
-		if msg.HasAttachments() {
+		// Save attachments to a subfolder (skip for raw format since .eml
+		// already contains attachments inline).
+		if fmtr.Name() != "raw" && msg.HasAttachments() {
 			attDir := filepath.Join(outputDir, fmt.Sprintf("%03d_attachments", msgIdx+1))
 			if err := os.MkdirAll(attDir, 0755); err != nil {
 				m.statusMsg = fmt.Sprintf("Error creating attachments dir: %v", err)
@@ -613,24 +616,33 @@ func (m Model) doExport() Model {
 
 // recalcLayout adjusts component sizes after a terminal resize.
 func (m Model) recalcLayout() Model {
-	// Viewport (preview pane) dimensions — contentHeight already excludes
-	// the border, so we use it directly.
+	// Viewport (preview pane) dimensions use the inner height (excluding border).
 	m.viewport.Width = m.previewWidth() - 4 // subtract border + padding
-	m.viewport.Height = m.contentHeight()
-	if m.viewport.Height < 1 {
-		m.viewport.Height = 1
-	}
+	m.viewport.Height = m.paneInnerHeight()
 
 	m = m.updatePreview()
 	return m
 }
 
-// contentHeight returns the height available for the main content panes'
-// inner area (excluding borders). We subtract:
-//   - 3 lines for chrome: title bar (1) + search bar (1) + help bar (1)
-//   - 2 lines for the rounded border (top + bottom) around each pane
-func (m Model) contentHeight() int {
-	h := m.height - 3 - 2
+// paneOuterHeight returns the total height available for each pane including
+// its border. We subtract the measured chrome height (title + search + help
+// bars) which may be more than 3 lines if any bar text wraps.
+func (m Model) paneOuterHeight() int {
+	chrome := m.chromeHeight
+	if chrome < 3 {
+		chrome = 3 // minimum estimate before first render measures it
+	}
+	h := m.height - chrome
+	if h < 3 { // need at least room for top border + 1 content line + bottom border
+		h = 3
+	}
+	return h
+}
+
+// paneInnerHeight returns the number of content lines visible inside a pane
+// after subtracting the border (2 lines: top + bottom).
+func (m Model) paneInnerHeight() int {
+	h := m.paneOuterHeight() - 2
 	if h < 1 {
 		h = 1
 	}
@@ -648,13 +660,10 @@ func (m Model) previewWidth() int {
 }
 
 // listHeight returns how many email rows are visible in the list pane.
-// contentHeight already excludes borders, so we use it directly.
+// This must match the actual visible area (inner height), NOT the lipgloss
+// pane height, otherwise the scroll offset drifts.
 func (m Model) listHeight() int {
-	h := m.contentHeight()
-	if h < 1 {
-		h = 1
-	}
-	return h
+	return m.paneInnerHeight()
 }
 
 // --------------------------------------------------------------------------
@@ -688,12 +697,19 @@ func (m Model) viewMainContent() string {
 		previewStyle = previewPaneActiveStyle
 	}
 
-	// Width values are for the inner content area — lipgloss adds the border
-	// on top of this. We subtract 2 for the left+right border characters and
-	// 2 more for the padding (1 each side).
-	listW := m.listWidth() - 4
-	previewW := m.previewWidth() - 4
-	contentH := m.contentHeight()
+	// lipgloss Width() includes padding but NOT border. We subtract 2 for
+	// the left+right border characters only. The padding (1 cell each side)
+	// is part of the Width value, so lipgloss handles it internally.
+	// This means the actual content area (where text wraps) is:
+	//   Width - padding = (listWidth-2) - 2 = listWidth-4 = paneInnerW
+	listW := m.listWidth() - 2
+	previewW := m.previewWidth() - 2
+
+	// innerH is how many lines of content fit inside the pane (excluding border).
+	// outerH is the total pane height including border — used for MaxHeight so
+	// lipgloss never renders taller than the available space.
+	innerH := m.paneInnerHeight()
+	outerH := m.paneOuterHeight()
 
 	if listW < 1 {
 		listW = 1
@@ -701,14 +717,11 @@ func (m Model) viewMainContent() string {
 	if previewW < 1 {
 		previewW = 1
 	}
-	if contentH < 1 {
-		contentH = 1
-	}
 
-	// Height + MaxHeight together: Height fills short content to the target
-	// height, MaxHeight prevents it from ever exceeding it.
-	leftPane := listStyle.Width(listW).Height(contentH).MaxHeight(contentH).Render(listContent)
-	rightPane := previewStyle.Width(previewW).Height(contentH).MaxHeight(contentH).Render(previewContent)
+	// Height(innerH) pads short content to fill the pane.
+	// MaxHeight(outerH) caps the total rendered height (content + border).
+	leftPane := listStyle.Width(listW).Height(innerH).MaxHeight(outerH).Render(listContent)
+	rightPane := previewStyle.Width(previewW).Height(innerH).MaxHeight(outerH).Render(previewContent)
 
 	// Join horizontally — this places the two panes side by side.
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
@@ -725,7 +738,10 @@ func (m Model) viewList() string {
 
 	var b strings.Builder
 	visibleRows := m.listHeight()
-	listW := m.listWidth() - 4 // account for border + padding + checkbox
+
+	// The pane inner width is what lipgloss gives us for content inside
+	// the border and padding. Every list item must fit within this width.
+	paneInnerW := m.listWidth() - 4 // border(2) + padding(2)
 
 	// Render only the visible slice of the filtered list.
 	end := m.offset + visibleRows
@@ -733,47 +749,59 @@ func (m Model) viewList() string {
 		end = len(m.filtered)
 	}
 
+	// clipStyle hard-clips any line that exceeds the pane width. This is a
+	// safety net: even if our width arithmetic is off by a cell (e.g., due to
+	// emoji width discrepancies between lipgloss and the actual terminal), the
+	// line will be clipped rather than wrapping to a second terminal line.
+	clipStyle := lipgloss.NewStyle().MaxWidth(paneInnerW)
+
 	for i := m.offset; i < end; i++ {
 		msgIdx := m.filtered[i]
 		msg := m.messages[msgIdx]
 
-		// Build the checkbox: [x] for selected, [ ] for not.
-		checkbox := "[ ] "
-		if m.selected[msgIdx] {
-			checkbox = "[x] "
-		}
-
-		// Add a paperclip emoji for emails with attachments.
-		attachIcon := "  "
-		if msg.HasAttachments() {
-			attachIcon = "📎"
-		}
-
-		// Build a summary line that fits the available width.
-		summary := msg.Summary()
-		maxLen := listW - len(checkbox) - 3 // 3 for the icon + space
-		if maxLen < 0 {
-			maxLen = 0
-		}
-		if len(summary) > maxLen {
-			// Truncate with ellipsis if too long.
-			if maxLen > 3 {
-				summary = summary[:maxLen-3] + "..."
-			} else {
-				summary = summary[:maxLen]
-			}
-		}
-
-		line := checkbox + attachIcon + " " + summary
-
-		// Apply styling based on cursor position and selection state.
+		// Build the fixed-width prefix parts.
+		prefix := "  " // 2 cells: indent for non-cursor items
 		if i == m.cursor {
-			line = listItemCursorStyle.Render("> " + line)
-		} else if m.selected[msgIdx] {
-			line = listItemCheckedStyle.Render("  " + line)
-		} else {
-			line = listItemStyle.Render("  " + line)
+			prefix = "> " // 2 cells: cursor indicator
 		}
+
+		checkbox := "[ ] " // 4 cells
+		if m.selected[msgIdx] {
+			checkbox = "[x] " // 4 cells
+		}
+
+		// 📎 takes 2 display cells in the terminal, same as "  ".
+		attachIcon := "  " // 2 cells
+		if msg.HasAttachments() {
+			attachIcon = "📎" // 2 cells
+		}
+
+		// Measure the fixed parts using lipgloss to be safe with emoji widths.
+		fixedPart := prefix + checkbox + attachIcon + " "
+		fixedWidth := lipgloss.Width(fixedPart)
+
+		// Truncate the summary by display width, not byte length.
+		// This correctly handles multi-byte UTF-8 characters (ü, ö, etc.)
+		// which are 2+ bytes but only 1 display cell.
+		summary := msg.Summary()
+		maxSummaryW := paneInnerW - fixedWidth
+		summary = truncateToWidth(summary, maxSummaryW)
+
+		line := fixedPart + summary
+
+		// Apply styling (color/bold) — this adds ANSI codes but no extra width.
+		if i == m.cursor {
+			line = listItemCursorStyle.Render(line)
+		} else if m.selected[msgIdx] {
+			line = listItemCheckedStyle.Render(line)
+		} else {
+			line = listItemStyle.Render(line)
+		}
+
+		// Hard-clip: ensures no line exceeds paneInnerW display cells, even if
+		// our measurement was slightly off (e.g., emoji rendered wider than
+		// lipgloss expected).
+		line = clipStyle.Render(line)
 
 		b.WriteString(line)
 		if i < end-1 {
@@ -823,11 +851,48 @@ func (m Model) viewExportDialog() string {
 // Utility
 // --------------------------------------------------------------------------
 
-// max returns the larger of two ints.
-// (Go added a built-in max in 1.21, but we define it here for clarity.)
-func max(a, b int) int {
-	if a > b {
-		return a
+// truncateToWidth truncates a string to fit within maxWidth display cells.
+// Unlike simple byte slicing, this correctly handles multi-byte UTF-8 characters
+// (e.g., "ü" is 2 bytes but 1 display cell) and wide characters (e.g., CJK
+// characters that are 1 rune but 2 display cells).
+//
+// If the string needs truncating, it appends "..." (which takes 3 cells).
+func truncateToWidth(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
 	}
-	return b
+
+	// Fast path: if it already fits, return as-is.
+	w := lipgloss.Width(s)
+	if w <= maxWidth {
+		return s
+	}
+
+	// We need to truncate. Reserve 3 cells for the ellipsis.
+	targetWidth := maxWidth - 3
+	if targetWidth <= 0 {
+		// Not enough room for even "..." — just return what fits.
+		return truncateExact(s, maxWidth)
+	}
+
+	return truncateExact(s, targetWidth) + "..."
+}
+
+// truncateExact returns the longest prefix of s that fits within maxWidth
+// display cells, measured by lipgloss.Width (which understands Unicode widths).
+func truncateExact(s string, maxWidth int) string {
+	result := ""
+	currentWidth := 0
+
+	for _, r := range s {
+		// Measure what adding this rune would cost in display cells.
+		charWidth := lipgloss.Width(string(r))
+		if currentWidth+charWidth > maxWidth {
+			break
+		}
+		result += string(r)
+		currentWidth += charWidth
+	}
+
+	return result
 }

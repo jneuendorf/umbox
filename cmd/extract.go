@@ -1,12 +1,18 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/jneuendorf/umbox/formatter"
 	"github.com/jneuendorf/umbox/mbox"
 	"github.com/spf13/cobra"
+
+	// Blank import to trigger formatter registration via init() functions.
+	_ "github.com/jneuendorf/umbox/formatter"
 )
 
 // init is called automatically when this package is loaded.
@@ -21,20 +27,32 @@ func init() {
 	// and a short form (-o).
 	//
 	// Parameters: long name, short name, default value, description
-	extractCmd.Flags().StringP("output", "o", "./output", "destination directory for extracted .eml files")
+	extractCmd.Flags().StringP("output", "o", "./output", "destination directory for extracted files")
+	extractCmd.Flags().StringP("format", "f", "raw",
+		"output format: "+strings.Join(formatter.List(), ", "))
 }
 
 // extractCmd defines the "extract" subcommand.
 var extractCmd = &cobra.Command{
 	Use:   "extract <mbox-file>",
-	Short: "Extract emails from an mbox file as individual .eml files",
-	Long: `Extract reads an mbox file and saves each email as a separate .eml file.
+	Short: "Extract emails from an mbox file",
+	Long: `Extract reads an mbox file and saves each email as an individual file.
 
-EML is the standard RFC 5322 email format. These files can be opened by most
-email clients (Thunderbird, Outlook, Apple Mail, etc.).
+By default, emails are exported as raw .eml files (RFC 5322 format), which
+can be opened by most email clients (Thunderbird, Outlook, Apple Mail, etc.).
 
-Example:
-  umbox extract inbox.mbox -o ./my-emails`,
+Use the --format flag to convert to a human-readable format instead:
+  raw        - Standard .eml files (default)
+  plaintext  - Simple .txt files
+  markdown   - Markdown .md files (renders nicely on GitHub, in VS Code, etc.)
+
+Attachments are saved alongside each email in a subfolder when using
+plaintext or markdown formats.
+
+Examples:
+  umbox extract inbox.mbox -o ./my-emails
+  umbox extract inbox.mbox -f markdown -o ./readable
+  umbox extract inbox.mbox -f plaintext`,
 
 	// Args tells cobra to require exactly one positional argument (the mbox file path).
 	Args: cobra.ExactArgs(1),
@@ -47,14 +65,21 @@ Example:
 
 		// GetString retrieves the value of a flag by its name.
 		outputDir, _ := cmd.Flags().GetString("output")
+		formatName, _ := cmd.Flags().GetString("format")
 
-		return runExtract(mboxPath, outputDir)
+		return RunExtract(mboxPath, outputDir, formatName)
 	},
 }
 
-// runExtract contains the actual extraction logic, separated from the cobra
-// command definition so it can be reused by other code (e.g., a future TUI).
-func runExtract(mboxPath, outputDir string) error {
+// RunExtract contains the extraction/conversion logic. It's exported (uppercase)
+// so the TUI package can call it directly for exporting selected emails.
+func RunExtract(mboxPath, outputDir, formatName string) error {
+	// Look up the requested formatter in the registry.
+	fmtr, err := formatter.Get(formatName)
+	if err != nil {
+		return err
+	}
+
 	// Parse the mbox file into individual messages.
 	fmt.Printf("Parsing %s...\n", mboxPath)
 	messages, err := mbox.Parse(mboxPath)
@@ -71,21 +96,61 @@ func runExtract(mboxPath, outputDir string) error {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-	// Write each message as a .eml file.
+	// Write each message using the chosen formatter.
 	for i, msg := range messages {
-		// %03d pads the number with zeros (001, 002, ..., 999) so files sort correctly.
-		filename := fmt.Sprintf("%03d.eml", i+1)
-		filePath := filepath.Join(outputDir, filename)
-
-		// os.WriteFile writes bytes to a file, creating it if it doesn't exist.
-		// 0644 means owner can read/write, others can only read.
-		if err := os.WriteFile(filePath, msg.RawBytes, 0644); err != nil {
-			return fmt.Errorf("failed to write %s: %w", filePath, err)
+		if err := writeMessage(fmtr, msg, i, len(messages), outputDir); err != nil {
+			return err
 		}
-
-		fmt.Printf("  [%d/%d] %s → %s\n", i+1, len(messages), msg.Summary(), filename)
 	}
 
-	fmt.Printf("\nDone! Extracted %d emails to %s\n", len(messages), outputDir)
+	fmt.Printf("\nDone! Extracted %d emails as %s to %s\n", len(messages), formatName, outputDir)
+	return nil
+}
+
+// writeMessage writes a single email to disk using the given formatter.
+// This is also used by the TUI's export function.
+func writeMessage(fmtr formatter.Formatter, msg *mbox.Message, index, total int, outputDir string) error {
+	// %03d pads the number with zeros (001, 002, ..., 999) so files sort correctly.
+	filename := fmt.Sprintf("%03d%s", index+1, fmtr.Extension())
+	filePath := filepath.Join(outputDir, filename)
+
+	// Format the message into a buffer first, then write to disk.
+	var buf bytes.Buffer
+	if err := fmtr.Format(msg, &buf); err != nil {
+		return fmt.Errorf("failed to format message %d: %w", index+1, err)
+	}
+
+	// os.WriteFile writes bytes to a file, creating it if it doesn't exist.
+	// 0644 means owner can read/write, others can only read.
+	if err := os.WriteFile(filePath, buf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("failed to write %s: %w", filePath, err)
+	}
+
+	// Save attachments to a subfolder (only for non-raw formats, since .eml
+	// already contains attachments inline).
+	if fmtr.Name() != "raw" && msg.HasAttachments() {
+		attDir := filepath.Join(outputDir, fmt.Sprintf("%03d_attachments", index+1))
+		if err := os.MkdirAll(attDir, 0755); err != nil {
+			return fmt.Errorf("failed to create attachments directory: %w", err)
+		}
+
+		for j, att := range msg.Attachments {
+			attFilename := att.Filename
+			if attFilename == "" {
+				// Some attachments don't have filenames — give them a generic one.
+				attFilename = fmt.Sprintf("attachment_%d", j+1)
+			}
+			attPath := filepath.Join(attDir, attFilename)
+			if err := os.WriteFile(attPath, att.Data, 0644); err != nil {
+				return fmt.Errorf("failed to write attachment %s: %w", attPath, err)
+			}
+		}
+
+		fmt.Printf("  [%d/%d] %s → %s (+ %d attachments)\n",
+			index+1, total, msg.Summary(), filename, len(msg.Attachments))
+	} else {
+		fmt.Printf("  [%d/%d] %s → %s\n", index+1, total, msg.Summary(), filename)
+	}
+
 	return nil
 }

@@ -5,8 +5,7 @@ A CLI tool for extracting and converting emails from mbox archive files.
 ## What it does
 
 - **Browse** emails interactively in a terminal UI (search, select, export)
-- **Extract** emails from `.mbox` files as individual `.eml` files (standard email format)
-- **Convert** emails to human-readable formats: plain text (`.txt`) or Markdown (`.md`)
+- **Extract** emails from `.mbox` files as individual `.eml`, `.txt`, or `.md` files
 - Saves **attachments** alongside converted emails
 
 ## Prerequisites
@@ -82,32 +81,25 @@ Key bindings:
 | `e` | Export selected emails |
 | `q` | Quit |
 
-### Extract emails as .eml files
+### Extract emails
 
 ```bash
-# Extract all emails to ./output/ (default)
-./umbox extract inbox.mbox
-
-# Extract to a specific directory
+# Extract as raw .eml files (default)
 ./umbox extract inbox.mbox -o ./my-emails
+
+# Extract as Markdown
+./umbox extract inbox.mbox -f markdown -o ./readable
+
+# Extract as plain text
+./umbox extract inbox.mbox -f plaintext -o ./readable
 ```
 
-Each email becomes a numbered `.eml` file (e.g., `001.eml`, `002.eml`). EML files can be opened by most email clients (Thunderbird, Outlook, Apple Mail).
+Available formats:
+- `raw` (default) — Standard `.eml` files, openable by any email client
+- `markdown` — `.md` files with metadata table and body
+- `plaintext` — Simple `.txt` files
 
-### Convert emails to readable formats
-
-```bash
-# Convert to plain text (default format)
-./umbox convert inbox.mbox -o ./readable
-
-# Convert to Markdown
-./umbox convert inbox.mbox -f markdown -o ./readable
-
-# Convert to plain text (explicit)
-./umbox convert inbox.mbox -f plaintext -o ./readable
-```
-
-Attachments are saved in numbered subfolders alongside each email:
+Attachments are saved in numbered subfolders alongside each email (for markdown and plaintext formats):
 ```
 readable/
 ├── 001.md
@@ -124,7 +116,6 @@ readable/
 ./umbox --help
 ./umbox extract --help
 ./umbox browse --help
-./umbox convert --help
 ```
 
 ## Project Structure
@@ -135,8 +126,7 @@ umbox/
 ├── cmd/                 # CLI commands (thin wrappers around core logic)
 │   ├── root.go          # Base command + help text
 │   ├── browse.go        # "browse" subcommand (launches TUI)
-│   ├── extract.go       # "extract" subcommand
-│   └── convert.go       # "convert" subcommand
+│   └── extract.go       # "extract" subcommand (all formats)
 ├── tui/                 # Interactive terminal UI (Bubble Tea)
 │   ├── tui.go           # Main model — Init/Update/View + Run()
 │   ├── keymap.go        # Key binding definitions
@@ -147,6 +137,7 @@ umbox/
 └── formatter/           # Output format system (extensible)
     ├── formatter.go     # Formatter interface
     ├── registry.go      # Format registry (lookup by name)
+    ├── raw.go           # Raw .eml output (no conversion)
     ├── plaintext.go     # Plain text output
     └── markdown.go      # Markdown output
 ```
@@ -193,7 +184,7 @@ func (f *HTMLFormatter) Format(msg *mbox.Message, w io.Writer) error {
 }
 ```
 
-That's it! The `init()` function registers the formatter automatically, and it becomes available via `--format html` on the CLI.
+That's it! The `init()` function registers the formatter automatically, and it becomes available via `--format html` on the CLI and in the TUI export dialog.
 
 ## Where to get mbox files
 
@@ -222,9 +213,7 @@ go fmt ./...
 
 ## Roadmap
 
-- [x] Extract emails as .eml files
-- [x] Convert to plain text
-- [x] Convert to Markdown
+- [x] Extract emails (raw .eml, plain text, Markdown)
 - [x] TUI for browsing and selectively exporting emails
 - [ ] HTML output format
 - [ ] Additional search filters (date range, attachment presence)
