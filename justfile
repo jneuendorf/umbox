@@ -36,6 +36,10 @@ sample-plaintext: build
     @echo "\nOutput:"
     @ls -l /tmp/umbox-sample-txt
 
+# Launch the interactive TUI browser with sample data
+browse: build
+    ./umbox browse testdata/test.mbox
+
 # Run all sample recipes
 sample-all: sample-extract sample-markdown sample-plaintext
 

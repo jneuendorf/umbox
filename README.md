@@ -4,6 +4,7 @@ A CLI tool for extracting and converting emails from mbox archive files.
 
 ## What it does
 
+- **Browse** emails interactively in a terminal UI (search, select, export)
 - **Extract** emails from `.mbox` files as individual `.eml` files (standard email format)
 - **Convert** emails to human-readable formats: plain text (`.txt`) or Markdown (`.md`)
 - Saves **attachments** alongside converted emails
@@ -58,6 +59,29 @@ go install .
 
 ## Usage
 
+### Browse emails interactively (TUI)
+
+```bash
+./umbox browse inbox.mbox
+```
+
+This opens a terminal UI with:
+- **Left pane**: Scrollable email list with selection checkboxes
+- **Right pane**: Preview of the highlighted email
+- **Search**: Press `/` to filter by sender, subject, or body text
+- **Export**: Select emails with `space`, then press `e` to export
+
+Key bindings:
+| Key | Action |
+|-----|--------|
+| `↑/↓` or `j/k` | Navigate email list |
+| `tab` | Switch focus between list and preview |
+| `space` | Toggle select current email |
+| `a` | Select/deselect all |
+| `/` | Search/filter |
+| `e` | Export selected emails |
+| `q` | Quit |
+
 ### Extract emails as .eml files
 
 ```bash
@@ -99,6 +123,7 @@ readable/
 ```bash
 ./umbox --help
 ./umbox extract --help
+./umbox browse --help
 ./umbox convert --help
 ```
 
@@ -109,8 +134,13 @@ umbox/
 ├── main.go              # Entry point — just calls cmd.Execute()
 ├── cmd/                 # CLI commands (thin wrappers around core logic)
 │   ├── root.go          # Base command + help text
+│   ├── browse.go        # "browse" subcommand (launches TUI)
 │   ├── extract.go       # "extract" subcommand
 │   └── convert.go       # "convert" subcommand
+├── tui/                 # Interactive terminal UI (Bubble Tea)
+│   ├── tui.go           # Main model — Init/Update/View + Run()
+│   ├── keymap.go        # Key binding definitions
+│   └── styles.go        # lipgloss color/layout styles
 ├── mbox/                # Core library — parsing mbox files
 │   ├── message.go       # Message and Attachment data types
 │   └── parser.go        # Mbox file parser
@@ -124,9 +154,8 @@ umbox/
 The architecture is modular by design:
 - **`mbox/`** handles all parsing — no I/O decisions, no formatting
 - **`formatter/`** handles all output formatting — pluggable via an interface
-- **`cmd/`** is just glue code that wires parsing and formatting together
-
-This means a future TUI can import `mbox` and `formatter` directly without duplicating any logic.
+- **`tui/`** imports `mbox` and `formatter` directly — no logic duplication
+- **`cmd/`** is just glue code that wires everything together
 
 ## Adding a New Output Format
 
@@ -193,6 +222,6 @@ go fmt ./...
 - [x] Extract emails as .eml files
 - [x] Convert to plain text
 - [x] Convert to Markdown
-- [ ] TUI for browsing and selectively exporting emails
+- [x] TUI for browsing and selectively exporting emails
 - [ ] HTML output format
-- [ ] Search/filter by date, sender, subject
+- [ ] Additional search filters (date range, attachment presence)

@@ -115,19 +115,35 @@ func parseMessage(raw []byte) (*Message, error) {
 		return nil, fmt.Errorf("failed to parse email: %w", err)
 	}
 
+	// mime.WordDecoder decodes RFC 2047 "encoded words" in email headers.
+	// Encoded words look like =?charset?encoding?text?= and are used for
+	// non-ASCII characters in headers (e.g., umlauts, accents, CJK).
+	// Go's mail.Header.Get() does NOT decode these automatically.
+	decoder := new(mime.WordDecoder)
+
+	// decodeHeader is a helper that decodes an encoded header value,
+	// falling back to the raw value if decoding fails.
+	decodeHeader := func(value string) string {
+		decoded, err := decoder.DecodeHeader(value)
+		if err != nil {
+			return value // fall back to raw value
+		}
+		return decoded
+	}
+
 	// Build our Message struct from the parsed email.
 	msg := &Message{
 		// The "&" creates a pointer to the struct. In Go, you almost always work
 		// with pointers to structs to avoid copying large data around.
 		MessageID: mailMsg.Header.Get("Message-ID"),
-		From:      mailMsg.Header.Get("From"),
-		Subject:   mailMsg.Header.Get("Subject"),
+		From:      decodeHeader(mailMsg.Header.Get("From")),
+		Subject:   decodeHeader(mailMsg.Header.Get("Subject")),
 		Headers:   map[string][]string(mailMsg.Header),
 		RawBytes:  raw,
 	}
 
 	// Parse the "To" header which may contain multiple comma-separated addresses.
-	if to := mailMsg.Header.Get("To"); to != "" {
+	if to := decodeHeader(mailMsg.Header.Get("To")); to != "" {
 		// Split on commas and trim whitespace from each address.
 		for _, addr := range strings.Split(to, ",") {
 			msg.To = append(msg.To, strings.TrimSpace(addr))
