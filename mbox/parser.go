@@ -3,10 +3,12 @@ package mbox
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
+	"mime/quotedprintable"
 	"net/mail"
 	"os"
 	"strings"
@@ -168,7 +170,8 @@ func parseMessage(raw []byte) (*Message, error) {
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
 		// If we can't parse the content type, treat the whole body as plain text.
-		body, _ := io.ReadAll(mailMsg.Body)
+		cte := mailMsg.Header.Get("Content-Transfer-Encoding")
+		body, _ := io.ReadAll(decodedReader(mailMsg.Body, cte))
 		msg.TextBody = string(body)
 		return msg, nil
 	}
@@ -183,7 +186,9 @@ func parseMessage(raw []byte) (*Message, error) {
 		}
 	} else {
 		// Simple single-part message — just read the body.
-		body, err := io.ReadAll(mailMsg.Body)
+		// Decode Content-Transfer-Encoding (e.g., quoted-printable text).
+		cte := mailMsg.Header.Get("Content-Transfer-Encoding")
+		body, err := io.ReadAll(decodedReader(mailMsg.Body, cte))
 		if err != nil {
 			return nil, fmt.Errorf("failed to read message body: %w", err)
 		}
@@ -215,8 +220,14 @@ func parseMultipart(body io.Reader, boundary string, msg *Message) error {
 			return fmt.Errorf("failed to read multipart section: %w", err)
 		}
 
+		// Decode Content-Transfer-Encoding (base64, quoted-printable, etc.)
+		// before reading the part data. Go's multipart.Part does NOT do this
+		// automatically, so base64 attachments would be stored as raw text.
+		encoding := part.Header.Get("Content-Transfer-Encoding")
+		partReader := decodedReader(part, encoding)
+
 		// Read this part's content into memory.
-		partData, err := io.ReadAll(part)
+		partData, err := io.ReadAll(partReader)
 		if err != nil {
 			continue // Skip parts we can't read.
 		}
@@ -253,4 +264,27 @@ func parseMultipart(body io.Reader, boundary string, msg *Message) error {
 	}
 
 	return nil
+}
+
+// decodedReader wraps a reader with the appropriate Content-Transfer-Encoding
+// decoder. Email attachments are typically base64-encoded, and text parts may
+// use quoted-printable encoding. Go's multipart.Part and mail.Message do NOT
+// decode these automatically — we must do it ourselves.
+//
+// Supported encodings:
+//   - "base64"           → decodes base64 (handles line breaks in input)
+//   - "quoted-printable" → decodes QP escapes like =C3=BC → ü
+//   - "7bit", "8bit", "binary", "" → no decoding needed
+func decodedReader(r io.Reader, encoding string) io.Reader {
+	switch strings.ToLower(strings.TrimSpace(encoding)) {
+	case "base64":
+		// Go's base64.NewDecoder handles line breaks (\r\n) in the input
+		// automatically, which is exactly what email base64 contains.
+		return base64.NewDecoder(base64.StdEncoding, r)
+	case "quoted-printable":
+		return quotedprintable.NewReader(r)
+	default:
+		// "7bit", "8bit", "binary", or empty — no transformation needed.
+		return r
+	}
 }

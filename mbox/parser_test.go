@@ -9,10 +9,12 @@ package mbox
 // The -v flag shows verbose output (each test name + PASS/FAIL).
 
 import (
+	"encoding/base64"
 	"fmt"
 	"mime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -36,7 +38,8 @@ type testEmail struct {
 type testAttachment struct {
 	Filename    string
 	ContentType string
-	Data        string // plain text content (will be included as-is, not base64)
+	Data        string // the expected decoded content
+	Encoding    string // "base64", "quoted-printable", or "" for no encoding
 }
 
 // testEmails is the canonical test dataset. Tests reference this directly.
@@ -88,6 +91,23 @@ var testEmails = []testEmail{
 		To:      []string{"subscriber@example.com"},
 		Subject: "Weekly Newsletter",
 		HTMLBody: "<html><body><h1>Newsletter</h1><p>Hello subscriber!</p></body></html>",
+	},
+	{
+		// Email 6: Multipart with base64-encoded attachment.
+		// This verifies that Content-Transfer-Encoding: base64 is decoded
+		// correctly, so binary attachments (images, PDFs) are not corrupted.
+		From:    "Eve <eve@example.com>",
+		To:      []string{"team@example.com"},
+		Subject: "Photo from the event",
+		Body:    "See the attached photo.",
+		Attachments: []testAttachment{
+			{
+				Filename:    "photo.png",
+				ContentType: "image/png",
+				Data:        "PNG\x89\x50\x4e\x47\x0d\x0a\x1a\x0abinary-image-data\x00\xff",
+				Encoding:    "base64",
+			},
+		},
 	},
 }
 
@@ -182,9 +202,30 @@ func writeMixedMultipart(b *strings.Builder, e testEmail) {
 	for _, att := range e.Attachments {
 		fmt.Fprintf(b, "\n--%s\n", boundary)
 		fmt.Fprintf(b, "Content-Type: %s; name=\"%s\"\n", att.ContentType, att.Filename)
-		fmt.Fprintf(b, "Content-Disposition: attachment; filename=\"%s\"\n\n", att.Filename)
-		b.WriteString(att.Data)
-		b.WriteByte('\n')
+		fmt.Fprintf(b, "Content-Disposition: attachment; filename=\"%s\"\n", att.Filename)
+
+		if att.Encoding != "" {
+			fmt.Fprintf(b, "Content-Transfer-Encoding: %s\n", att.Encoding)
+		}
+		b.WriteByte('\n') // blank line after headers
+
+		// Write the body: encode it if the test specifies an encoding.
+		switch att.Encoding {
+		case "base64":
+			encoded := base64.StdEncoding.EncodeToString([]byte(att.Data))
+			// Split into 76-char lines (standard for email base64).
+			for i := 0; i < len(encoded); i += 76 {
+				end := i + 76
+				if end > len(encoded) {
+					end = len(encoded)
+				}
+				b.WriteString(encoded[i:end])
+				b.WriteByte('\n')
+			}
+		default:
+			b.WriteString(att.Data)
+			b.WriteByte('\n')
+		}
 	}
 
 	fmt.Fprintf(b, "\n--%s--\n", boundary)
@@ -442,5 +483,189 @@ func TestParseSingleMessage(t *testing.T) {
 	}
 	if messages[0].Subject != single[0].Subject {
 		t.Errorf("subject = %q, want %q", messages[0].Subject, single[0].Subject)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Content-Transfer-Encoding tests
+// ---------------------------------------------------------------------------
+
+// TestParseBase64Attachment verifies that base64-encoded attachments are
+// decoded to the original binary data. This is the fix for corrupted images.
+func TestParseBase64Attachment(t *testing.T) {
+	// Find the base64-encoded attachment test case (email 6).
+	email := testEmails[6]
+	mboxData := generateMbox([]testEmail{email})
+	messages, err := ParseReader(strings.NewReader(mboxData))
+	if err != nil {
+		t.Fatalf("ParseReader failed: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+
+	msg := messages[0]
+	if len(msg.Attachments) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(msg.Attachments))
+	}
+
+	att := msg.Attachments[0]
+	wantData := email.Attachments[0].Data
+
+	if att.Filename != "photo.png" {
+		t.Errorf("attachment filename = %q, want %q", att.Filename, "photo.png")
+	}
+
+	// The critical check: decoded attachment data must match the original binary.
+	if string(att.Data) != wantData {
+		t.Errorf("attachment data mismatch:\n  got  (%d bytes) = %x\n  want (%d bytes) = %x",
+			len(att.Data), att.Data, len(wantData), []byte(wantData))
+	}
+}
+
+// TestParseBase64AttachmentNotRawBase64 ensures that the attachment data is
+// NOT the raw base64 text (the old buggy behavior).
+func TestParseBase64AttachmentNotRawBase64(t *testing.T) {
+	email := testEmails[6]
+	mboxData := generateMbox([]testEmail{email})
+	messages, err := ParseReader(strings.NewReader(mboxData))
+	if err != nil {
+		t.Fatalf("ParseReader failed: %v", err)
+	}
+
+	att := messages[0].Attachments[0]
+	// If the parser forgot to decode base64, the data would contain only
+	// ASCII base64 characters. Our test data contains non-ASCII bytes (\x89,
+	// \xff, \x00), so the decoded data should NOT be valid base64 text.
+	encoded := base64.StdEncoding.EncodeToString([]byte(email.Attachments[0].Data))
+	if string(att.Data) == encoded {
+		t.Error("attachment data is still raw base64 — Content-Transfer-Encoding was not decoded")
+	}
+}
+
+// TestParseUnEncodedAttachmentStillWorks verifies that attachments without
+// Content-Transfer-Encoding (plain text) are not broken by the decoder.
+func TestParseUnEncodedAttachmentStillWorks(t *testing.T) {
+	// Email 2 has a plain-text attachment with no encoding.
+	email := testEmails[2]
+	mboxData := generateMbox([]testEmail{email})
+	messages, err := ParseReader(strings.NewReader(mboxData))
+	if err != nil {
+		t.Fatalf("ParseReader failed: %v", err)
+	}
+
+	att := messages[0].Attachments[0]
+	// Trim whitespace since the parser may include trailing newlines.
+	got := strings.TrimRight(string(att.Data), "\n\r ")
+	want := strings.TrimRight(email.Attachments[0].Data, "\n\r ")
+	if got != want {
+		t.Errorf("unencoded attachment data:\n  got  = %q\n  want = %q", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FilenameBase tests
+// ---------------------------------------------------------------------------
+
+// TestFilenameBaseNormal checks the basic format: "<date> <subject>".
+func TestFilenameBaseNormal(t *testing.T) {
+	msg := &Message{
+		Date:    time.Date(2025, 3, 29, 10, 0, 0, 0, time.UTC),
+		Subject: "Hello from umbox!",
+	}
+	got := msg.FilenameBase(DefaultMaxSubjectLen)
+	want := "2025-03-29 Hello from umbox!"
+	if got != want {
+		t.Errorf("FilenameBase() = %q, want %q", got, want)
+	}
+}
+
+// TestFilenameBaseUnsafeChars verifies that filesystem-unsafe characters
+// are replaced with underscores.
+func TestFilenameBaseUnsafeChars(t *testing.T) {
+	msg := &Message{
+		Date:    time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC),
+		Subject: "Re: Q1/Q2 report <draft> — final?",
+	}
+	got := msg.FilenameBase(DefaultMaxSubjectLen)
+	// / < > ? should all become underscores.
+	if strings.ContainsAny(got, "/\\:*?\"<>|") {
+		t.Errorf("FilenameBase() contains unsafe chars: %q", got)
+	}
+	// The date prefix should still be there.
+	if !strings.HasPrefix(got, "2025-01-15 ") {
+		t.Errorf("FilenameBase() missing date prefix: %q", got)
+	}
+}
+
+// TestFilenameBaseEmpty verifies the fallback when there's no subject.
+func TestFilenameBaseEmpty(t *testing.T) {
+	msg := &Message{
+		Date:    time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
+		Subject: "",
+	}
+	got := msg.FilenameBase(DefaultMaxSubjectLen)
+	if got != "2025-06-01 (no subject)" {
+		t.Errorf("FilenameBase() = %q, want %q", got, "2025-06-01 (no subject)")
+	}
+}
+
+// TestFilenameBaseLongSubject verifies that very long subjects are truncated.
+func TestFilenameBaseLongSubject(t *testing.T) {
+	msg := &Message{
+		Date:    time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		Subject: strings.Repeat("A", 200),
+	}
+	got := msg.FilenameBase(DefaultMaxSubjectLen)
+	// "2006-01-02 " is 11 runes, plus DefaultMaxSubjectLen (50) = 61 runes max.
+	if len([]rune(got)) > 61 {
+		t.Errorf("FilenameBase() too long (%d runes): %q", len([]rune(got)), got)
+	}
+}
+
+// TestFilenameBaseLongUnicodeSubject verifies that truncation works correctly
+// with multi-byte UTF-8 characters. Slicing by bytes (not runes) would split
+// a character like "ü" mid-sequence, producing an illegal byte sequence that
+// the filesystem rejects.
+func TestFilenameBaseLongUnicodeSubject(t *testing.T) {
+	// Build a 200-rune subject using multi-byte characters (ü = 2 bytes each).
+	msg := &Message{
+		Date:    time.Date(2020, 3, 18, 0, 0, 0, 0, time.UTC),
+		Subject: strings.Repeat("ü", 200),
+	}
+	got := msg.FilenameBase(DefaultMaxSubjectLen)
+
+	// Must be valid UTF-8 — no broken runes.
+	for i, r := range got {
+		if r == '\uFFFD' {
+			t.Errorf("FilenameBase() contains replacement char at byte %d (broken UTF-8): %q", i, got)
+			break
+		}
+	}
+
+	// Must be truncated to at most 61 runes (11 date prefix + 50 subject).
+	if len([]rune(got)) > 61 {
+		t.Errorf("FilenameBase() too long (%d runes): %q", len([]rune(got)), got)
+	}
+}
+
+// TestFilenameBaseCustomMaxLen verifies that a custom max subject length works.
+func TestFilenameBaseCustomMaxLen(t *testing.T) {
+	msg := &Message{
+		Date:    time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		Subject: strings.Repeat("X", 200),
+	}
+
+	// With max 20, total should be at most 31 runes (11 date + 20 subject).
+	got := msg.FilenameBase(20)
+	if len([]rune(got)) > 31 {
+		t.Errorf("FilenameBase(20) too long (%d runes): %q", len([]rune(got)), got)
+	}
+
+	// With max 0 (unlimited), subject should not be truncated.
+	got = msg.FilenameBase(0)
+	// 11 date prefix + 200 subject = 211 runes.
+	if len([]rune(got)) != 211 {
+		t.Errorf("FilenameBase(0) = %d runes, want 211", len([]rune(got)))
 	}
 }

@@ -565,12 +565,20 @@ func (m Model) doExport() Model {
 		return m
 	}
 
+	// Track filenames to handle duplicates (same date + subject).
+	seen := make(map[string]int)
 	exported := 0
+
 	for msgIdx := range m.selected {
 		msg := m.messages[msgIdx]
 
-		// Write the formatted email.
-		filename := fmt.Sprintf("%03d%s", msgIdx+1, fmtr.Extension())
+		// Build filename from date + subject, e.g., "2025-03-29 Hello.md".
+		base := msg.FilenameBase(mbox.DefaultMaxSubjectLen)
+		seen[base]++
+		if seen[base] > 1 {
+			base = fmt.Sprintf("%s (%d)", base, seen[base])
+		}
+		filename := base + fmtr.Extension()
 		filePath := filepath.Join(outputDir, filename)
 
 		var buf bytes.Buffer
@@ -586,7 +594,7 @@ func (m Model) doExport() Model {
 		// Save attachments to a subfolder (skip for raw format since .eml
 		// already contains attachments inline).
 		if fmtr.Name() != "raw" && msg.HasAttachments() {
-			attDir := filepath.Join(outputDir, fmt.Sprintf("%03d_attachments", msgIdx+1))
+			attDir := filepath.Join(outputDir, base+"_attachments")
 			if err := os.MkdirAll(attDir, 0755); err != nil {
 				m.statusMsg = fmt.Sprintf("Error creating attachments dir: %v", err)
 				return m

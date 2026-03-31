@@ -30,6 +30,8 @@ func init() {
 	extractCmd.Flags().StringP("output", "o", "./output", "destination directory for extracted files")
 	extractCmd.Flags().StringP("format", "f", "raw",
 		"output format: "+strings.Join(formatter.List(), ", "))
+	extractCmd.Flags().IntP("max-subject-len", "s", mbox.DefaultMaxSubjectLen,
+		"max characters for the subject part of filenames (0 = unlimited)")
 }
 
 // extractCmd defines the "extract" subcommand.
@@ -66,14 +68,16 @@ Examples:
 		// GetString retrieves the value of a flag by its name.
 		outputDir, _ := cmd.Flags().GetString("output")
 		formatName, _ := cmd.Flags().GetString("format")
+		maxSubjectLen, _ := cmd.Flags().GetInt("max-subject-len")
 
-		return RunExtract(mboxPath, outputDir, formatName)
+		return RunExtract(mboxPath, outputDir, formatName, maxSubjectLen)
 	},
 }
 
 // RunExtract contains the extraction/conversion logic. It's exported (uppercase)
 // so the TUI package can call it directly for exporting selected emails.
-func RunExtract(mboxPath, outputDir, formatName string) error {
+// maxSubjectLen controls how many characters of the subject appear in filenames.
+func RunExtract(mboxPath, outputDir, formatName string, maxSubjectLen int) error {
 	// Look up the requested formatter in the registry.
 	fmtr, err := formatter.Get(formatName)
 	if err != nil {
@@ -97,8 +101,10 @@ func RunExtract(mboxPath, outputDir, formatName string) error {
 	}
 
 	// Write each message using the chosen formatter.
+	// The seen map tracks filenames to handle duplicates (same date + subject).
+	seen := make(map[string]int)
 	for i, msg := range messages {
-		if err := writeMessage(fmtr, msg, i, len(messages), outputDir); err != nil {
+		if err := writeMessage(fmtr, msg, i, len(messages), outputDir, seen, maxSubjectLen); err != nil {
 			return err
 		}
 	}
@@ -108,10 +114,18 @@ func RunExtract(mboxPath, outputDir, formatName string) error {
 }
 
 // writeMessage writes a single email to disk using the given formatter.
-// This is also used by the TUI's export function.
-func writeMessage(fmtr formatter.Formatter, msg *mbox.Message, index, total int, outputDir string) error {
-	// %03d pads the number with zeros (001, 002, ..., 999) so files sort correctly.
-	filename := fmt.Sprintf("%03d%s", index+1, fmtr.Extension())
+// The seen map tracks how many times each base filename has been used,
+// so duplicates (same date + subject) get a "(2)", "(3)" suffix.
+func writeMessage(fmtr formatter.Formatter, msg *mbox.Message, index, total int, outputDir string, seen map[string]int, maxSubjectLen int) error {
+	// Build the filename from the email's date and subject, e.g.,
+	// "2025-03-29 Hello from umbox.md". If two emails have the same
+	// date+subject, the second gets "(2)" appended.
+	base := msg.FilenameBase(maxSubjectLen)
+	seen[base]++
+	if seen[base] > 1 {
+		base = fmt.Sprintf("%s (%d)", base, seen[base])
+	}
+	filename := base + fmtr.Extension()
 	filePath := filepath.Join(outputDir, filename)
 
 	// Format the message into a buffer first, then write to disk.
@@ -129,7 +143,7 @@ func writeMessage(fmtr formatter.Formatter, msg *mbox.Message, index, total int,
 	// Save attachments to a subfolder (only for non-raw formats, since .eml
 	// already contains attachments inline).
 	if fmtr.Name() != "raw" && msg.HasAttachments() {
-		attDir := filepath.Join(outputDir, fmt.Sprintf("%03d_attachments", index+1))
+		attDir := filepath.Join(outputDir, base+"_attachments")
 		if err := os.MkdirAll(attDir, 0755); err != nil {
 			return fmt.Errorf("failed to create attachments directory: %w", err)
 		}

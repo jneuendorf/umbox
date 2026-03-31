@@ -4,6 +4,7 @@
 package mbox
 
 import (
+	"strings"
 	"time"
 )
 
@@ -71,4 +72,59 @@ func (m *Message) Summary() string {
 	// It formats a string using placeholders like %s (string) and %s (another string).
 	date := m.Date.Format("2006-01-02") // Go uses this specific reference date for formatting
 	return date + " | " + m.From + " | " + m.Subject
+}
+
+// DefaultMaxSubjectLen is the default maximum number of characters for the
+// subject portion of an extracted filename. Users can override this with
+// the --max-subject-len CLI flag.
+const DefaultMaxSubjectLen = 50
+
+// FilenameBase returns a filesystem-safe string in the format "<date> <subject>",
+// suitable for use as a filename (without extension). Characters that are
+// invalid in filenames (/, \, :, etc.) are replaced with underscores, and
+// the subject is truncated to maxSubjectLen runes.
+func (m *Message) FilenameBase(maxSubjectLen int) string {
+	date := m.Date.Format("2006-01-02")
+	subject := sanitizeFilename(m.Subject, maxSubjectLen)
+	if subject == "" {
+		subject = "(no subject)"
+	}
+	return date + " " + subject
+}
+
+// sanitizeFilename replaces characters that are invalid in filenames on
+// common operating systems (Windows, macOS, Linux) with underscores. It also
+// trims whitespace/dots and truncates to maxRunes to avoid OS path limits.
+func sanitizeFilename(s string, maxRunes int) string {
+	// Characters not allowed in filenames on at least one major OS.
+	// / and \ are path separators; : * ? " < > | are reserved on Windows.
+	replacer := strings.NewReplacer(
+		"/", "_",
+		"\\", "_",
+		":", "_",
+		"*", "_",
+		"?", "_",
+		"\"", "_",
+		"<", "_",
+		">", "_",
+		"|", "_",
+	)
+	s = replacer.Replace(s)
+
+	// Trim leading/trailing whitespace and dots (macOS/Windows treat leading
+	// dots as hidden files, and trailing dots cause issues on Windows).
+	s = strings.TrimSpace(s)
+	s = strings.Trim(s, ".")
+
+	// Truncate long subjects to avoid filesystem path length limits.
+	// We truncate by runes (not bytes!) so we never split a multi-byte
+	// UTF-8 character like "ä" or "ü" mid-sequence, which would produce
+	// an illegal byte sequence that the filesystem rejects.
+	runes := []rune(s)
+	if maxRunes > 0 && len(runes) > maxRunes {
+		s = string(runes[:maxRunes])
+		s = strings.TrimSpace(s) // clean up if we cut mid-word
+	}
+
+	return s
 }
