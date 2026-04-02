@@ -177,13 +177,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd
 		}
-		// Scroll the email list with the mouse wheel.
+		// Scroll the email list with the mouse wheel. Unlike keyboard arrows
+		// (which move the cursor through visible items before scrolling),
+		// the mouse wheel scrolls the viewport directly.
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
-			m = m.moveCursor(-3)
+			m = m.scrollList(-3)
 			m = m.updatePreview()
 		case tea.MouseButtonWheelDown:
-			m = m.moveCursor(3)
+			m = m.scrollList(3)
 			m = m.updatePreview()
 		}
 		return m, nil
@@ -428,6 +430,50 @@ func (m Model) moveCursor(delta int) Model {
 	}
 	if m.cursor >= m.offset+visibleRows {
 		m.offset = m.cursor - visibleRows + 1
+	}
+
+	return m
+}
+
+// scrollList moves both the viewport offset and cursor by delta, keeping the
+// cursor's relative position within the viewport stable. This is used for
+// mouse wheel scrolling, where the user expects the list to scroll immediately
+// rather than the cursor walking through visible items first.
+func (m Model) scrollList(delta int) Model {
+	if len(m.filtered) == 0 {
+		return m
+	}
+
+	m.cursor += delta
+	m.offset += delta
+
+	// Clamp offset to valid range.
+	maxOffset := len(m.filtered) - m.listHeight()
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.offset < 0 {
+		m.offset = 0
+	}
+	if m.offset > maxOffset {
+		m.offset = maxOffset
+	}
+
+	// Clamp cursor to valid range.
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	if m.cursor >= len(m.filtered) {
+		m.cursor = len(m.filtered) - 1
+	}
+
+	// Ensure cursor stays within the visible viewport.
+	if m.cursor < m.offset {
+		m.cursor = m.offset
+	}
+	visibleRows := m.listHeight()
+	if m.cursor >= m.offset+visibleRows {
+		m.cursor = m.offset + visibleRows - 1
 	}
 
 	return m
